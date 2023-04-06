@@ -40,8 +40,8 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
-#define MAX_REG_READ  125U
+#define REG_MEM_SIZE            10U
+#define MAX_REG_READ            125U
 #define MODBUS_RES_HEADER_SIZE  5U /* <1byte:id><1byte:function code> <1byte:length> <2byte:CRC>*/
 /* USER CODE END PM */
 
@@ -57,6 +57,7 @@ void SystemClock_Config(void);
 static void led_cntl(uint8_t data);
 void process_modbus(uint8_t *pdata, uint16_t len);
 void proccess_write_holding_register(uint8_t *pdata, uint16_t len);
+void proccess_write_multiple_holding_register(uint8_t *pdata, uint16_t len);
 void proccess_read_holding_register(uint8_t *pdata, uint16_t len);
 void proccess_input_register(uint8_t *pdata, uint16_t len);
 void proccess_read_coil(uint8_t *pdata, uint16_t len);
@@ -75,7 +76,7 @@ extern uint8_t rx_length;
 extern volatile uint8_t rx_complete_flag;
 
 /* Register space */
-uint16_t holding_reg[] = {15, 30, 45, 60, 75};
+uint16_t holding_reg[REG_MEM_SIZE] = {15, 30, 45, 60, 75};
 uint16_t input_reg[] = {10,15,20, 25, 30};
 uint8_t Coils[] = {0b10100101, 0b11001100,0b11110000,0b00001111,0b10100101,0b10100101,0b10100101,0b10100101};
 uint8_t DiscreteInput[] = {0b10100101, 0b11001100,0b11110000,0b00001111,0b10100101,0b10100101,0b10100101,0b10100101};
@@ -255,6 +256,9 @@ void process_modbus(uint8_t *pdata, uint16_t len)
 			proccess_write_coil(pdata, len);
 		case 0x06: // write single holding register
 			proccess_write_holding_register(pdata, len);
+			break;
+		case 0x10: // write multiple holding register
+			proccess_write_multiple_holding_register(pdata, len);
 			break;
 		default:
 			modbus_exception(pdata, 0x01);
@@ -502,6 +506,48 @@ void proccess_write_holding_register(uint8_t *pdata, uint16_t len)
 		else
 		{
 			modbus_exception(pdata, 0x02); // illegal address
+		}
+	}
+}
+
+void proccess_write_multiple_holding_register(uint8_t *pdata, uint16_t len)
+{
+	uint16_t addr = ((pdata[2]<< 8) | pdata[3]);
+	uint16_t num_of_reg = ((pdata[4]<< 8) | pdata[5]);
+	uint16_t byte_count = pdata[6];
+	uint16_t crc =  ((pdata[len-2]) | pdata[len-1] << 8);
+	uint16_t verify_crc = CRC16(pdata, len-2);
+	memset(modbus_response_buff,0x00, sizeof(modbus_response_buff));
+	if(verify_crc == crc)
+	{
+		// check len of data is equal to num of register*2
+		if((byte_count == num_of_reg * 2) && num_of_reg >=1 && num_of_reg <= sizeof(holding_reg)/sizeof(holding_reg[0]))
+		{
+			if( (addr + num_of_reg) <=  sizeof(holding_reg)/sizeof(holding_reg[0]))
+			{
+				for(int i = 0; i< num_of_reg; i++)
+				{
+					holding_reg[addr + i] = ((pdata[7+(2*i)]<< 8) | pdata[7+((2*i)+1)]);
+				}
+	//			holding_reg[addr] = pdata[4]<< 8) | pdata[5];
+				modbus_response_buff[0] = pdata[0];
+				modbus_response_buff[1] = pdata[1];
+				modbus_response_buff[2] = pdata[2];
+				modbus_response_buff[3] = pdata[3];
+				modbus_response_buff[4] = pdata[4];
+				modbus_response_buff[5] = pdata[5];
+				uint16_t check_sum = CRC16(modbus_response_buff, 6);
+				modbus_response_buff[6] = check_sum;
+				modbus_response_buff[7] = check_sum>>8;
+				HAL_UART_Transmit(&huart2, modbus_response_buff, 8, 100);
+			}
+			else
+			{
+				modbus_exception(pdata, 0x02); // illegal address
+			}
+		}else
+		{
+			modbus_exception(pdata, 0x03);
 		}
 	}
 }
